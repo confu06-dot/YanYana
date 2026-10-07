@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -29,6 +29,13 @@ jobs:
       - name: Build macOS
         run: npx electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
 
+      - name: Show build files
+        run: |
+          echo "=== DIST ==="
+          ls -lah dist
+          echo "=== FILES ==="
+          find dist -maxdepth 1 -type f -print
+
       - name: Upload macOS build
         uses: actions/upload-artifact@v4
         with:
@@ -36,3 +43,5 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
