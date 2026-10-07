@@ -1,0 +1,54 @@
+{
+  "name": "yanyana",
+  "version": "1.0.0",
+  "description": "YanYana - birlikte izleme uygulaması",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "build": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "keywords": [],
+  "author": "YanYana",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.yanyana.app",
+    "productName": "YanYana",
+    "files": [
+      "main.js",
+      "index.html",
+      "renderer.js",
+      "chat.js",
+      "server.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "YanYana-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.social-networking"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

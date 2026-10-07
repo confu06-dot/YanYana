@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>YanYana</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- =========================
+         GİRİŞ / ODA EKRANI
+    ========================== -->
+
+    <div id="lobby" class="lobby">
+
+        <div class="lobby-card">
+
+            <div class="brand">
+                <div class="brand-icon">Y</div>
+
+                <div>
+                    <div class="brand-name">
+                        Yan<span>Yana</span>
+                    </div>
+
+                    <div class="brand-subtitle">
+                        Birlikte izleyin, birlikte kalın.
+                    </div>
+                </div>
+            </div>
+
+
+            <div class="lobby-title">
+                Birlikte izlemeye hazır mısın?
+            </div>
+
+            <div class="lobby-description">
+                Bir oda oluştur veya arkadaşının gönderdiği
+                oda koduna katıl.
+            </div>
+
+
+            <label class="field-label">
+                Adın
+            </label>
+
+            <input
+                id="nameInput"
+                class="lobby-input"
+                type="text"
+                maxlength="30"
+                placeholder="Adını yaz..."
+                autocomplete="off"
+            >
+
+
+            <div class="lobby-actions">
+
+                <button
+                    id="createRoomBtn"
+                    class="lobby-button primary"
+                >
+                    <span>＋</span>
+                    Oda Oluştur
+                </button>
+
+                <button
+                    id="joinRoomBtn"
+                    class="lobby-button secondary"
+                >
+                    <span>↗</span>
+                    Odaya Katıl
+                </button>
+
+            </div>
+
+
+            <div
+                id="joinRoomArea"
+                class="join-room-area hidden"
+            >
+
+                <label class="field-label">
+                    Oda kodu
+                </label>
+
+                <div class="room-code-row">
+
+                    <input
+                        id="roomCodeInput"
+                        class="lobby-input room-input"
+                        type="text"
+                        maxlength="6"
+                        placeholder="123456"
+                        autocomplete="off"
+                    >
+
+                    <button
+                        id="enterRoomBtn"
+                        class="enter-room-button"
+                    >
+                        Katıl
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div class="lobby-footer">
+                🔒 Hesap gerekmez · Sadece 2 kişi
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- =========================
+         ANA UYGULAMA
+    ========================== -->
+
+    <div
+        id="appScreen"
+        class="app-screen hidden"
+    >
+
+        <!-- SIDEBAR -->
+
+        <aside class="sidebar">
+
+            <div class="sidebar-brand">
+
+                <div class="brand-icon small">
+                    Y
+                </div>
+
+                <div class="brand-name">
+                    Yan<span>Yana</span>
+                </div>
+
+            </div>
+
+
+            <div class="sidebar-section">
+
+                <div class="sidebar-label">
+                    ODA
+                </div>
+
+                <div class="sidebar-item active">
+                    <span>🎬</span>
+                    Birlikte İzle
+                </div>
+
+                <div class="sidebar-item">
+                    <span>💬</span>
+                    Sohbet
+                </div>
+
+            </div>
+
+
+            <div class="sidebar-section">
+
+                <div class="sidebar-label">
+                    BAĞLANTI
+                </div>
+
+                <div class="connection-card">
+
+                    <div
+                        id="connectionDot"
+                        class="connection-dot"
+                    ></div>
+
+                    <div>
+
+                        <div
+                            id="connectionText"
+                            class="connection-title"
+                        >
+                            Bağlanıyor
+                        </div>
+
+                        <div
+                            id="connectionSubtext"
+                            class="connection-subtitle"
+                        >
+                            Sunucu bekleniyor...
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div class="sidebar-bottom">
+
+                <div class="room-card">
+
+                    <div class="room-card-label">
+                        ODA KODU
+                    </div>
+
+                    <div class="room-code-display">
+
+                        <span id="roomCodeDisplay">
+                            ------
+                        </span>
+
+                        <button
+                            id="copyRoomBtn"
+                            title="Oda kodunu kopyala"
+                        >
+                            📋
+                        </button>
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    id="leaveBtn"
+                    class="leave-button"
+                >
+                    <span>☎</span>
+                    Görüşmeden Ayrıl
+                </button>
+
+            </div>
+
+        </aside>
+
+
+        <!-- ANA ALAN -->
+
+        <main class="main">
+
+            <!-- TOPBAR -->
+
+            <header class="topbar">
+
+                <div class="topbar-title">
+
+                    <span class="topbar-icon">
+                        🎬
+                    </span>
+
+                    <div>
+
+                        <div class="topbar-main">
+                            Birlikte İzle
+                        </div>
+
+                        <div
+                            id="roomStatus"
+                            class="topbar-status"
+                        >
+                            Bağlanıyor...
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <div class="topbar-actions">
+
+                    <button
+                        id="copyRoomTopBtn"
+                        class="topbar-button"
+                        title="Oda kodunu kopyala"
+                    >
+                        🔗 Kodu Kopyala
+                    </button>
+
+                </div>
+
+            </header>
+
+
+            <!-- İÇERİK -->
+
+            <div class="content">
+
+
+                <!-- VİDEO ALANI -->
+
+                <section class="video-area">
+
+
+                    <div class="video-header">
+
+                        <div>
+
+                            <div class="video-title">
+                                Görüşme
+                            </div>
+
+                            <div class="video-subtitle">
+                                Arkadaşınla bağlantıda kal.
+                            </div>
+
+                        </div>
+
+                        <div
+                            id="peerStatus"
+                            class="peer-status"
+                        >
+                            ● Bekleniyor
+                        </div>
+
+                    </div>
+
+
+                    <div class="videos">
+
+
+                        <!-- KARŞI TARAF -->
+
+                        <div
+                            id="remoteVideoBox"
+                            class="video-box remote-box"
+                        >
+
+                            <video
+                                id="remoteVideo"
+                                autoplay
+                                playsinline
+                            ></video>
+
+
+                            <div
+                                id="remotePlaceholder"
+                                class="video-placeholder"
+                            >
+
+                                <div class="avatar large">
+                                    ?
+                                </div>
+
+                                <div
+                                    id="remotePlaceholderText"
+                                    class="placeholder-title"
+                                >
+                                    Karşı taraf bekleniyor
+                                </div>
+
+                                <div class="placeholder-subtitle">
+                                    Oda kodunu arkadaşınla paylaş.
+                                </div>
+
+                            </div>
+
+
+                            <div class="video-overlay">
+
+                                <div class="video-person">
+
+                                    <div
+                                        id="remoteName"
+                                        class="video-name"
+                                    >
+                                        Karşı taraf
+                                    </div>
+
+                                    <div
+                                        id="remoteMicStatus"
+                                        class="video-mic"
+                                    >
+                                        🎤
+                                    </div>
+
+                                </div>
+
+                                <div class="video-quality">
+                                    HD
+                                </div>
+
+                            </div>
+
+                        </div>
+
+
+                        <!-- BEN -->
+
+                        <div
+                            id="localVideoBox"
+                            class="video-box local-box"
+                        >
+
+                            <video
+                                id="localVideo"
+                                autoplay
+                                muted
+                                playsinline
+                            ></video>
+
+
+                            <div
+                                id="localPlaceholder"
+                                class="local-placeholder"
+                            >
+                                <div class="avatar">
+                                    Y
+                                </div>
+                            </div>
+
+
+                            <div class="video-overlay">
+
+                                <div class="video-person">
+
+                                    <div
+                                        id="localName"
+                                        class="video-name"
+                                    >
+                                        Sen
+                                    </div>
+
+                                    <div
+                                        id="localMicStatus"
+                                        class="video-mic"
+                                    >
+                                        🎤
+                                    </div>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+
+                    </div>
+
+
+                    <!-- KONTROLLER -->
+
+                    <div class="controls">
+
+
+                        <button
+                            id="micBtn"
+                            class="control-button"
+                            title="Mikrofon"
+                        >
+                            <span class="control-icon">
+                                🎤
+                            </span>
+
+                            <span class="control-label">
+                                Mikrofon
+                            </span>
+                        </button>
+
+
+                        <button
+                            id="cameraBtn"
+                            class="control-button"
+                            title="Kamera"
+                        >
+                            <span class="control-icon">
+                                📷
+                            </span>
+
+                            <span class="control-label">
+                                Kamera
+                            </span>
+                        </button>
+
+
+                        <button
+                            id="screenBtn"
+                            class="control-button screen-control"
+                            title="Ekran paylaş"
+                        >
+                            <span class="control-icon">
+                                🖥️
+                            </span>
+
+                            <span class="control-label">
+                                Ekran Paylaş
+                            </span>
+                        </button>
+
+
+                        <div class="control-divider"></div>
+
+
+                        <button
+                            id="speakerBtn"
+                            class="control-button"
+                            title="Ses"
+                        >
+                            <span class="control-icon">
+                                🔊
+                            </span>
+
+                            <span class="control-label">
+                                Ses
+                            </span>
+                        </button>
+
+
+                        <button
+                            id="leaveCallBtn"
+                            class="control-button danger-control"
+                            title="Görüşmeden ayrıl"
+                        >
+                            <span class="control-icon">
+                                ☎
+                            </span>
+
+                            <span class="control-label">
+                                Ayrıl
+                            </span>
+                        </button>
+
+                    </div>
+
+
+                </section>
+
+
+                <!-- CHAT -->
+
+                <aside class="chat">
+
+
+                    <div class="chat-header">
+
+                        <div class="chat-header-title">
+
+                            <div class="chat-icon">
+                                💬
+                            </div>
+
+                            <div>
+
+                                <div class="chat-title">
+                                    Sohbet
+                                </div>
+
+                                <div class="chat-subtitle">
+                                    Odanızdaki mesajlar
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <div
+                        id="messages"
+                        class="messages"
+                    >
+
+                        <div class="system-message">
+                            <div class="system-line"></div>
+
+                            <span>
+                                Odaya hoş geldin ❤️
+                            </span>
+
+                            <div class="system-line"></div>
+                        </div>
+
+                    </div>
+
+
+                    <div class="chat-input-area">
+
+                        <div class="chat-input-wrapper">
+
+                            <input
+                                id="messageInput"
+                                type="text"
+                                maxlength="1000"
+                                placeholder="Bir mesaj yaz..."
+                                autocomplete="off"
+                            >
+
+                            <button
+                                id="sendBtn"
+                                class="send-button"
+                                title="Gönder"
+                            >
+                                ➤
+                            </button>
+
+                        </div>
+
+                        <div class="chat-hint">
+                            Enter ile gönder
+                        </div>
+
+                    </div>
+
+
+                </aside>
+
+
+            </div>
+
+        </main>
+
+    </div>
+
+</div>
+
+
+<!-- UZAK SES -->
+
+<audio
+    id="remoteAudio"
+    autoplay
+></audio>
+
+
+<!-- ÇIKIŞ ONAYI -->
+
+<div
+    id="leaveModal"
+    class="modal hidden"
+>
+
+    <div class="modal-card">
+
+        <div class="modal-icon">
+            ☎
+        </div>
+
+        <div class="modal-title">
+            Görüşmeden ayrıl?
+        </div>
+
+        <div class="modal-text">
+            Bağlantı kapatılacak ve odadan çıkacaksın.
+        </div>
+
+        <div class="modal-actions">
+
+            <button
+                id="cancelLeaveBtn"
+                class="modal-button secondary"
+            >
+                Vazgeç
+            </button>
+
+            <button
+                id="confirmLeaveBtn"
+                class="modal-button danger"
+            >
+                Ayrıl
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script src="renderer.js"></script>
+<script src="chat.js"></script>
+
+</body>
+
+</html>
