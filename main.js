@@ -2,7 +2,9 @@ const {
     app,
     BrowserWindow,
     session,
-    desktopCapturer
+    desktopCapturer,
+    ipcMain,
+    shell
 } = require("electron");
 
 const path = require("path");
@@ -33,6 +35,56 @@ app.commandLine.appendSwitch(
     "disable-breakpad"
 );
 
+ipcMain.on("window-minimize", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.minimize();
+});
+
+ipcMain.on("window-maximize", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+        if (win.isMaximized()) {
+            win.unmaximize();
+        } else {
+            win.maximize();
+        }
+    }
+});
+
+ipcMain.on("window-close", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.close();
+});
+
+// Discord stili ekran & pencere kaynaklarını önizlemeleriyle getir
+ipcMain.handle("get-screen-sources", async () => {
+    try {
+        const sources = await desktopCapturer.getSources({
+            types: ["screen", "window"],
+            thumbnailSize: { width: 360, height: 200 },
+            fetchWindowIcons: true
+        });
+
+        return sources.map(s => ({
+            id: s.id,
+            name: s.name,
+            thumbnail: s.thumbnail.toDataURL(),
+            appIcon: s.appIcon ? s.appIcon.toDataURL() : null,
+            isScreen: s.id.startsWith("screen:")
+        }));
+    } catch (e) {
+        console.error("❌ desktopCapturer error:", e);
+        return [];
+    }
+});
+
+// Chat linklerini güvenle tarayıcıda aç
+ipcMain.handle("open-external-url", (event, url) => {
+    if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+        shell.openExternal(url);
+    }
+});
+
 function createWindow() {
 
     const win = new BrowserWindow({
@@ -43,6 +95,7 @@ function createWindow() {
         minWidth: 1100,
         minHeight: 700,
 
+        frame: false,
         backgroundColor: "#08080d",
 
         webPreferences: {

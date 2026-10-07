@@ -1,2208 +1,1153 @@
 // ============================================================
-// YANYANA - RENDERER.JS
+// YANYANA - RENDERER.JS (Discord-style suite, clean version)
 // ============================================================
 
-const SIGNALING_URL =
-    "wss://yanyana-production.up.railway.app";
+const SIGNALING_URL = "wss://yanyana-production.up.railway.app";
 
+// ── State ────────────────────────────────────────────────────
 let socket = null;
 let peerConnection = null;
-
 let localStream = null;
 let remoteStream = null;
 let screenStream = null;
-
 let pendingCandidates = [];
 
-let currentRoomId = null;
+let currentRoomId   = null;
 let currentUserName = null;
 
-let isMicOn = true;
-let isCameraOn = true;
-let isScreenSharing = false;
+let isMicOn          = true;
+let isCameraOn       = true;
+let isScreenSharing  = false;
+let isPipSwapped     = false;
 
-// ============================================================
-// ELEMENTLER
-// ============================================================
+// Network quality
+let currentNetworkQuality = "good";
+let currentBitrate        = 7_000_000;
+let previousBitrate       = 0;
+let lastQualityCheck      = 0;
+let autoQualityEnabled    = true;
+let reconnectAttempts     = 0;
 
-const lobby = document.getElementById("lobby");
-const appScreen = document.getElementById("appScreen");
+// Screen picker state
+let cachedSources       = [];
+let selectedSourceId    = null;
+let isScreenTabActive   = true;
+let currentSelectedRes  = 1080;
+let currentSelectedFps  = 30;
 
-const nameInput = document.getElementById("nameInput");
-const createRoomBtn = document.getElementById("createRoomBtn");
-const joinRoomBtn = document.getElementById("joinRoomBtn");
-const joinRoomArea = document.getElementById("joinRoomArea");
-const roomCodeInput = document.getElementById("roomCodeInput");
-const enterRoomBtn = document.getElementById("enterRoomBtn");
+// Mic test
+let isTestingMic = false;
+let micAudioCtx  = null;
+let micAnimFrame = null;
 
-const roomCodeDisplay =
-    document.getElementById("roomCodeDisplay");
+// Ping
+let pingInterval = null;
 
-const copyRoomBtn =
-    document.getElementById("copyRoomBtn");
+// Toast
+let toastTimeout = null;
 
-const copyRoomTopBtn =
-    document.getElementById("copyRoomTopBtn");
+// ── Electron IPC ─────────────────────────────────────────────
+let ipcRenderer = null;
+try {
+    if (typeof window.require !== "undefined") {
+        ipcRenderer = window.require("electron").ipcRenderer;
+    }
+} catch (e) {}
 
-const localVideo =
-    document.getElementById("localVideo");
+// ── DOM helpers ───────────────────────────────────────────────
+function el(id) { return document.getElementById(id); }
 
-const remoteVideo =
-    document.getElementById("remoteVideo");
+// Window controls
+const winMinBtn   = el("winMinBtn");
+const winMaxBtn   = el("winMaxBtn");
+const winCloseBtn = el("winCloseBtn");
 
-const remoteAudio =
-    document.getElementById("remoteAudio");
+if (ipcRenderer) {
+    winMinBtn  ?.addEventListener("click", () => ipcRenderer.send("window-minimize"));
+    winMaxBtn  ?.addEventListener("click", () => ipcRenderer.send("window-maximize"));
+    winCloseBtn?.addEventListener("click", () => ipcRenderer.send("window-close"));
+} else {
+    if (winMinBtn)   winMinBtn.style.display   = "none";
+    if (winMaxBtn)   winMaxBtn.style.display   = "none";
+    if (winCloseBtn) winCloseBtn.style.display = "none";
+}
 
-const remotePlaceholder =
-    document.getElementById("remotePlaceholder");
+// Core video / audio elements
+const localVideo        = el("localVideo");
+const remoteVideo       = el("remoteVideo");
+const remoteAudio       = el("remoteAudio");
+const remotePlaceholder = el("remotePlaceholder");
+const localPlaceholder  = el("localPlaceholder");
 
-const remotePlaceholderText =
-    document.getElementById("remotePlaceholderText");
+// Overlays
+const localName        = el("localName");
+const remoteName       = el("remoteName");
+const localMicStatus   = el("localMicStatus");
+const remoteMicStatus  = el("remoteMicStatus");
+const liveStreamBadge  = el("liveStreamBadge");
+const floatingCamBox   = el("floatingCamBox");
+const pipCameraVideo   = el("pipCameraVideo");
+const pipUserTag       = el("pipUserTag");
 
-const remoteName =
-    document.getElementById("remoteName");
+// Titlebar
+const titlebarBadges   = el("titlebarBadges");
+const topRoomCode      = el("topRoomCode");
+const connectionText   = el("connectionText");
+const connectionSubtext= el("connectionSubtext");
+const connectionDot    = el("connectionDot");
+const qualityDot       = el("qualityDot");
+const currentQualityTag= el("currentQualityTag");
+const pingDisplay      = el("pingDisplay");
 
-const localName =
-    document.getElementById("localName");
+// Dock buttons
+const screenBtn        = el("screenBtn");
+const cameraBtn        = el("cameraBtn");
+const micBtn           = el("micBtn");
+const leaveCallBtn     = el("leaveCallBtn");
+const reactionBtn      = el("reactionBtn");
+const settingsBtn      = el("settingsBtn");
+const reactionBar      = el("reactionBar");
 
-const remoteMicStatus =
-    document.getElementById("remoteMicStatus");
+// Pip controls
+const swapStreamBtn    = el("swapStreamBtn");
+const closePipBtn      = el("closePipBtn");
 
-const localMicStatus =
-    document.getElementById("localMicStatus");
+// Room code
+const copyRoomTopBtn   = el("copyRoomTopBtn");
+const roomCodeDisplay  = el("roomCodeDisplay"); // hidden compat
 
-const micBtn =
-    document.getElementById("micBtn");
+// Modals
+const joinModal           = el("joinModal");
+const closeJoinModalBtn   = el("closeJoinModalBtn");
+const joinRoomArea        = el("joinRoomArea");
+const roomCodeInput       = el("roomCodeInput");
+const enterRoomBtn        = el("enterRoomBtn");
 
-const cameraBtn =
-    document.getElementById("cameraBtn");
+const leaveModal          = el("leaveModal");
+const cancelLeaveBtn      = el("cancelLeaveBtn");
+const confirmLeaveBtn     = el("confirmLeaveBtn");
 
-const screenBtn =
-    document.getElementById("screenBtn");
+const settingsModal       = el("settingsModal");
+const closeSettingsModalBtn = el("closeSettingsModalBtn");
+const audioSourceSelect   = el("audioSourceSelect");
+const videoSourceSelect   = el("videoSourceSelect");
+const audioOutputSelect   = el("audioOutputSelect");
+const masterVolumeSlider  = el("masterVolumeSlider");
+const masterVolumeValue   = el("masterVolumeValue");
+const testMicBtn          = el("testMicBtn");
+const micMeterFill        = el("micMeterFill");
+const micTestStatus       = el("micTestStatus");
+const settingsCamPreview  = el("settingsCamPreview");
 
-const speakerBtn =
-    document.getElementById("speakerBtn");
+const screenShareModal    = el("screenShareModal");
+const closeScreenModalBtn = el("closeScreenModalBtn");
+const screenSourcesGrid   = el("screenSourcesGrid");
+const tabScreensBtn       = el("tabScreensBtn");
+const tabWindowsBtn       = el("tabWindowsBtn");
+const qualitySelect       = null; // pill-based in HTML, handled separately
+const fpsSelect           = null; // pill-based in HTML, handled separately
+const audioShareToggle    = el("shareSystemAudioCheck");
+const startShareBtn       = el("startScreenStreamBtn");
+const stopShareBtn        = el("cancelScreenModalBtn"); // reused as cancel/stop
 
-const leaveCallBtn =
-    document.getElementById("leaveCallBtn");
+// Chat
+const peerStatus  = el("peerStatus");
 
-const connectionText =
-    document.getElementById("connectionText");
+// Toast
+const toastNotification = el("toastNotification");
+const toastMessage      = el("toastMessage");
 
-const connectionSubtext =
-    document.getElementById("connectionSubtext");
+// Reactions container
+const reactionFlyingContainer = el("reactionFlyingContainer");
 
-const connectionDot =
-    document.getElementById("connectionDot");
+// Views
+const lobbyView   = el("lobby");
+const waitingView = el("waitingView");
+const callView    = el("appScreen"); // id="appScreen" in HTML
 
-const peerStatus =
-    document.getElementById("peerStatus");
+// Home inputs
+const nameInput    = el("nameInput");
+const createRoomBtn= el("createRoomBtn");
+const joinRoomBtn  = el("joinRoomBtn");
 
-const leaveModal =
-    document.getElementById("leaveModal");
+// ── Toast ─────────────────────────────────────────────────────
+function showToast(message, duration = 2400) {
+    if (!toastNotification) return;
+    if (toastMessage) toastMessage.textContent = message;
+    toastNotification.classList.add("show");
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => {
+        toastNotification.classList.remove("show");
+    }, duration);
+}
 
-const cancelLeaveBtn =
-    document.getElementById("cancelLeaveBtn");
+// ── View switcher ─────────────────────────────────────────────
+function showView(viewName) {
+    if (lobbyView)   lobbyView.classList.toggle("hidden",   viewName !== "home");
+    if (waitingView) waitingView.classList.toggle("hidden", viewName !== "waiting");
+    if (callView)    callView.classList.toggle("hidden",    viewName !== "call");
 
-const confirmLeaveBtn =
-    document.getElementById("confirmLeaveBtn");
+    // Show titlebar badges when in call or waiting
+    if (titlebarBadges) {
+        titlebarBadges.classList.toggle("hidden", viewName === "home");
+    }
+}
 
-// ============================================================
-// ODA KODU
-// ============================================================
-
+// ── Room code generator ───────────────────────────────────────
 function generateRoomCode() {
-
-    return String(
-        Math.floor(100000 + Math.random() * 900000)
-    );
-
+    return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-// ============================================================
-// EKRANLARI DEĞİŞTİR
-// ============================================================
-
-function showAppScreen() {
-
-    if (lobby) {
-        lobby.classList.add("hidden");
-        lobby.style.display = "none";
-    }
-
-    if (appScreen) {
-        appScreen.classList.remove("hidden");
-        appScreen.style.display = "flex";
-    }
-
-}
-
-function showLobby() {
-
-    if (appScreen) {
-        appScreen.classList.add("hidden");
-        appScreen.style.display = "none";
-    }
-
-    if (lobby) {
-        lobby.classList.remove("hidden");
-        lobby.style.display = "flex";
-    }
-
-}
-
-// ============================================================
-// ODAYA GİR
-// ============================================================
-
+// ── Enter room ────────────────────────────────────────────────
 function enterRoom(roomId, name) {
+    currentRoomId   = String(roomId);
+    currentUserName = String(name || "Misafir");
 
-    currentRoomId = String(roomId);
-    currentUserName = String(name);
+    if (topRoomCode) topRoomCode.textContent = currentRoomId;
+    if (localName)   localName.textContent   = currentUserName;
+    if (pipUserTag)  pipUserTag.textContent  = currentUserName;
 
-    const params = new URLSearchParams();
-
-    params.set(
-        "room",
-        currentRoomId
-    );
-
-    params.set(
-        "name",
-        currentUserName
-    );
-
-    const newUrl =
-        `${window.location.pathname}?${params.toString()}`;
-
-    window.history.replaceState(
-        {},
-        "",
-        newUrl
-    );
-
-    showAppScreen();
-
-    if (roomCodeDisplay) {
-        roomCodeDisplay.textContent =
-            currentRoomId;
-    }
-
-    if (localName) {
-        localName.textContent =
-            currentUserName;
-    }
-
+    // Go directly to call — no waiting screen
+    showView("call");
     start();
-
 }
 
-// ============================================================
-// ODA OLUŞTUR
-// ============================================================
-
+// ── Create room button ────────────────────────────────────────
 if (createRoomBtn) {
-
-    createRoomBtn.addEventListener(
-        "click",
-        () => {
-
-            const name =
-                nameInput
-                    ? nameInput.value.trim()
-                    : "";
-
-            if (!name) {
-
-                alert(
-                    "Önce adını yaz."
-                );
-
-                if (nameInput) {
-                    nameInput.focus();
-                }
-
-                return;
-            }
-
-            const roomCode =
-                generateRoomCode();
-
-            enterRoom(
-                roomCode,
-                name
-            );
+    createRoomBtn.addEventListener("click", () => {
+        const name = nameInput ? nameInput.value.trim() : "";
+        if (!name) {
+            showToast("⚠️ Önce adını yaz!");
+            nameInput?.focus();
+            return;
         }
-    );
-
+        enterRoom(generateRoomCode(), name);
+    });
 }
 
-// ============================================================
-// ODAYA KATIL
-// ============================================================
-
+// ── Join room button (show modal) ─────────────────────────────
 if (joinRoomBtn) {
-
-    joinRoomBtn.addEventListener(
-        "click",
-        () => {
-
-            if (joinRoomArea) {
-
-                joinRoomArea.classList.remove(
-                    "hidden"
-                );
-
-                joinRoomArea.style.display =
-                    "block";
-            }
-
-            if (roomCodeInput) {
-                roomCodeInput.focus();
-            }
-        }
-    );
-
+    joinRoomBtn.addEventListener("click", () => {
+        if (joinModal) joinModal.classList.remove("hidden");
+        roomCodeInput?.focus();
+    });
 }
 
-// ============================================================
-// KATIL
-// ============================================================
+if (closeJoinModalBtn) {
+    closeJoinModalBtn.addEventListener("click", () => {
+        if (joinModal) joinModal.classList.add("hidden");
+    });
+}
 
 if (enterRoomBtn) {
+    enterRoomBtn.addEventListener("click", () => {
+        const name     = nameInput     ? nameInput.value.trim()     : "";
+        const roomCode = roomCodeInput ? roomCodeInput.value.trim() : "";
 
-    enterRoomBtn.addEventListener(
-        "click",
-        () => {
-
-            const name =
-                nameInput
-                    ? nameInput.value.trim()
-                    : "";
-
-            const roomCode =
-                roomCodeInput
-                    ? roomCodeInput.value.trim()
-                    : "";
-
-            if (!name) {
-
-                alert(
-                    "Önce adını yaz."
-                );
-
-                if (nameInput) {
-                    nameInput.focus();
-                }
-
-                return;
-            }
-
-            if (!/^\d{6}$/.test(roomCode)) {
-
-                alert(
-                    "6 haneli oda kodunu gir."
-                );
-
-                if (roomCodeInput) {
-                    roomCodeInput.focus();
-                }
-
-                return;
-            }
-
-            enterRoom(
-                roomCode,
-                name
-            );
+        if (!name) {
+            showToast("⚠️ Önce adını yaz!");
+            nameInput?.focus();
+            return;
         }
-    );
-
+        if (!/^\d{6}$/.test(roomCode)) {
+            showToast("⚠️ 6 haneli oda kodunu gir.");
+            roomCodeInput?.focus();
+            return;
+        }
+        if (joinModal) joinModal.classList.add("hidden");
+        enterRoom(roomCode, name);
+    });
 }
 
-// ============================================================
-// ENTER
-// ============================================================
-
 if (nameInput) {
-
-    nameInput.addEventListener(
-        "keydown",
-        event => {
-
-            if (event.key === "Enter") {
-                createRoomBtn?.click();
-            }
-
-        }
-    );
-
+    nameInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") createRoomBtn?.click();
+    });
 }
 
 if (roomCodeInput) {
+    roomCodeInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") enterRoomBtn?.click();
+    });
+}
 
-    roomCodeInput.addEventListener(
-        "keydown",
-        event => {
-
-            if (event.key === "Enter") {
-                enterRoomBtn?.click();
-            }
-
+// ── Copy room code ─────────────────────────────────────────────
+if (copyRoomTopBtn) {
+    copyRoomTopBtn.addEventListener("click", () => {
+        if (currentRoomId) {
+            navigator.clipboard.writeText(currentRoomId).catch(() => {});
+            showToast("📋 Oda kodu kopyalandı!");
         }
-    );
-
+    });
 }
 
-// ============================================================
-// URL'DEN ODA
-// ============================================================
-
-const urlParams =
-    new URLSearchParams(
-        window.location.search
-    );
-
-const urlRoom =
-    urlParams.get("room");
-
-const urlName =
-    urlParams.get("name");
-
-if (urlRoom && urlName) {
-
-    currentRoomId =
-        urlRoom;
-
-    currentUserName =
-        urlName;
-
-    showAppScreen();
-
-    if (roomCodeDisplay) {
-        roomCodeDisplay.textContent =
-            currentRoomId;
-    }
-
-    if (localName) {
-        localName.textContent =
-            currentUserName;
-    }
-
-    start();
-
-} else {
-
-    showLobby();
-
-}
-
-// ============================================================
-// BAĞLANTI DURUMU
-// ============================================================
-
-function setConnectionState(
-    state,
-    text,
-    subtext
-) {
-
-    if (connectionText) {
-        connectionText.textContent =
-            text;
-    }
-
-    if (connectionSubtext) {
-        connectionSubtext.textContent =
-            subtext || "";
-    }
-
+// ── Connection state ──────────────────────────────────────────
+function setConnectionState(state, text, subtext) {
+    if (connectionText)    connectionText.textContent    = text;
+    if (connectionSubtext) connectionSubtext.textContent = subtext || "";
     if (connectionDot) {
-
-        connectionDot.classList.remove(
-            "connected",
-            "connecting",
-            "error"
-        );
-
-        connectionDot.classList.add(
-            state
-        );
+        connectionDot.className = "connection-dot";
+        connectionDot.classList.add(state);
     }
 }
 
-// ============================================================
-// LOCAL MEDIA
-// ============================================================
+// ── Network quality UI ────────────────────────────────────────
+function updateNetworkQualityUI() {
+    if (!qualityDot) return;
+    qualityDot.className = "status-dot";
+    if (currentNetworkQuality === "good") {
+        qualityDot.classList.add("status-dot-green");
+        if (currentQualityTag) currentQualityTag.textContent = "HD";
+    } else if (currentNetworkQuality === "medium") {
+        qualityDot.classList.add("status-dot-yellow");
+        if (currentQualityTag) currentQualityTag.textContent = "SD";
+    } else {
+        qualityDot.classList.add("status-dot-red");
+        if (currentQualityTag) currentQualityTag.textContent = "Low";
+    }
+}
 
+function evaluateNetworkQuality(pingMs) {
+    const now = Date.now();
+    if (now - lastQualityCheck < 5000) return;
+    lastQualityCheck = now;
+
+    const prev = currentNetworkQuality;
+    if (pingMs < 50)       currentNetworkQuality = "good";
+    else if (pingMs < 150) currentNetworkQuality = "medium";
+    else                   currentNetworkQuality = "poor";
+
+    updateNetworkQualityUI();
+
+    if (!autoQualityEnabled) return;
+    if (currentNetworkQuality === prev) return;
+
+    // Adjust video sender bitrate
+    if (!peerConnection) return;
+    const sender = peerConnection.getSenders().find(s => s.track?.kind === "video");
+    if (!sender) return;
+
+    let target = 7_000_000;
+    if (currentNetworkQuality === "poor")   target = 1_500_000;
+    if (currentNetworkQuality === "medium") target = 3_000_000;
+    if (currentSelectedFps === 60) target = Math.round(target * 1.3);
+
+    const params = sender.getParameters();
+    if (!params.encodings) params.encodings = [{}];
+    params.encodings[0].maxBitrate = target;
+    sender.setParameters(params).catch(() => {});
+
+    if (currentNetworkQuality === "poor" && prev !== "poor") {
+        showToast("📴 Bağlantı kötü, kalite otomatik düşürüldü.", 4000);
+    } else if (currentNetworkQuality === "good" && prev !== "good") {
+        showToast("✅ Bağlantı iyileşti, kalite artırıldı.", 3000);
+    }
+}
+
+// ── Ping / pong ───────────────────────────────────────────────
+function startPingMonitor() {
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            sendSignal({ type: "ping", time: Date.now() });
+        }
+    }, 3000);
+}
+
+function stopPingMonitor() {
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+}
+
+// ── Local media ───────────────────────────────────────────────
 async function getLocalMedia() {
-
     try {
-
-        console.log(
-            "🎥 Kamera ve mikrofon isteniyor..."
-        );
-
-        localStream =
-            await navigator.mediaDevices.getUserMedia({
-
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                },
-
-                video: {
-                    width: {
-                        ideal: 1280
-                    },
-
-                    height: {
-                        ideal: 720
-                    },
-
-                    frameRate: {
-                        ideal: 30,
-                        max: 30
-                    }
-                }
-
-            });
-
-        console.log(
-            "✅ Kamera + mikrofon hazır."
-        );
-
-        if (localVideo) {
-
-            localVideo.srcObject =
-                localStream;
-
-            localVideo.muted =
-                true;
-
-            localVideo.autoplay =
-                true;
-
-            localVideo.playsInline =
-                true;
-
-            localVideo.play()
-                .catch(error => {
-
-                    console.warn(
-                        "Local video play:",
-                        error
-                    );
-
-                });
-        }
-
-        isMicOn = true;
+        localStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+        });
+        isMicOn    = true;
         isCameraOn = true;
-
-        updateLocalUI();
-
-    } catch (error) {
-
-        console.error(
-            "❌ Kamera + mikrofon alınamadı:",
-            error
-        );
-
+    } catch {
         try {
-
-            localStream =
-                await navigator.mediaDevices.getUserMedia({
-
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true
-                    }
-
-                });
-
-            isMicOn = true;
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            isMicOn    = true;
             isCameraOn = false;
-
-            updateLocalUI();
-
-            console.log(
-                "🎤 Sadece mikrofon hazır."
-            );
-
-        } catch (audioError) {
-
-            console.error(
-                "❌ Mikrofon da alınamadı:",
-                audioError
-            );
-
-            localStream =
-                new MediaStream();
-
-            isMicOn = false;
+        } catch {
+            localStream = new MediaStream();
+            isMicOn    = false;
             isCameraOn = false;
-
-            updateLocalUI();
         }
+    }
+
+    if (localVideo && localStream) {
+        localVideo.srcObject = localStream;
+        localVideo.muted     = true;
+        localVideo.play().catch(() => {});
+    }
+    updateLocalUI();
+}
+
+// ── UI update helpers ─────────────────────────────────────────
+function updateLocalUI() {
+    // Mic button
+    if (micBtn) {
+        micBtn.classList.toggle("btn-off", !isMicOn);
+        micBtn.title = isMicOn ? "Mikrofonu Kapat" : "Mikrofonu Aç";
+    }
+    if (localMicStatus) localMicStatus.textContent = isMicOn ? "🎤" : "🔇";
+
+    // Camera button
+    if (cameraBtn) {
+        cameraBtn.classList.toggle("btn-off", !isCameraOn);
+        cameraBtn.title = isCameraOn ? "Kamerayı Kapat" : "Kamerayı Aç";
+    }
+    if (localPlaceholder) localPlaceholder.style.display = isCameraOn ? "none" : "flex";
+
+    // Broadcast status to peer
+    if (socket?.readyState === WebSocket.OPEN) {
+        sendSignal({ type: "mic-status",    enabled: isMicOn });
+        sendSignal({ type: "camera-status", enabled: isCameraOn });
     }
 }
 
-// ============================================================
-// PEER CONNECTION
-// ============================================================
-
+// ── WebRTC peer connection ────────────────────────────────────
 function createPeerConnection() {
+    if (peerConnection) return peerConnection;
 
-    if (peerConnection) {
-        return peerConnection;
-    }
+    peerConnection = new RTCPeerConnection({
+        iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" }
+        ],
+        iceCandidatePoolSize: 10
+    });
 
-    console.log(
-        "🔗 PeerConnection oluşturuluyor..."
-    );
+    // Add tracks
+    const videoTrack = isScreenSharing && screenStream
+        ? screenStream.getVideoTracks()[0]
+        : localStream?.getVideoTracks()[0];
+    const videoSource = isScreenSharing && screenStream ? screenStream : localStream;
 
-    peerConnection =
-        new RTCPeerConnection({
+    if (videoTrack && videoSource) peerConnection.addTrack(videoTrack, videoSource);
+    localStream?.getAudioTracks().forEach(t => peerConnection.addTrack(t, localStream));
 
-            iceServers: [
-
-                {
-                    urls:
-                        "stun:stun.l.google.com:19302"
-                },
-
-                {
-                    urls:
-                        "stun:stun1.l.google.com:19302"
-                }
-
-            ],
-
-            iceCandidatePoolSize: 10
-        });
-
-
-    if (localStream) {
-
-        for (
-            const track of
-            localStream.getTracks()
-        ) {
-
-            console.log(
-                "📤 Local track:",
-                track.kind
-            );
-
-            peerConnection.addTrack(
-                track,
-                localStream
-            );
+    peerConnection.ontrack = event => {
+        if (!remoteStream) remoteStream = new MediaStream();
+        if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+            remoteStream.addTrack(event.track);
         }
-    }
+        if (remoteVideo) {
+            remoteVideo.srcObject = remoteStream;
+            remoteVideo.muted     = false;
+            remoteVideo.play().catch(() => {});
+        }
+        if (remoteAudio) remoteAudio.srcObject = null;
+        if (remotePlaceholder) remotePlaceholder.style.display = "none";
+        showView("call");
+    };
 
+    peerConnection.onicecandidate = event => {
+        if (event.candidate) sendSignal({ type: "candidate", candidate: event.candidate });
+    };
 
-    peerConnection.ontrack =
-        event => {
+    peerConnection.onconnectionstatechange = () => {
+        const state = peerConnection.connectionState;
+        console.log("🌐 WebRTC:", state);
 
-            console.log(
-                "📥 REMOTE TRACK:",
-                event.track.kind
-            );
-
-            if (!remoteStream) {
-                remoteStream =
-                    new MediaStream();
-            }
-
-            const exists =
-                remoteStream
-                    .getTracks()
-                    .some(
-                        track =>
-                            track.id ===
-                            event.track.id
-                    );
-
-            if (!exists) {
-
-                remoteStream.addTrack(
-                    event.track
-                );
-            }
-
-            if (remoteVideo) {
-
-                remoteVideo.srcObject =
-                    remoteStream;
-
-                remoteVideo.autoplay =
-                    true;
-
-                remoteVideo.playsInline =
-                    true;
-
-                remoteVideo.muted =
-                    false;
-
-                remoteVideo.play()
-                    .then(() => {
-
-                        console.log(
-                            "▶️ Karşı taraf videosu başladı."
-                        );
-
-                    })
-                    .catch(error => {
-
-                        console.warn(
-                            "Remote video:",
-                            error
-                        );
-
-                    });
-            }
-
-            if (remoteAudio) {
-                remoteAudio.srcObject =
-                    null;
-            }
-
-            if (remotePlaceholder) {
-                remotePlaceholder.style.display =
-                    "none";
-            }
-
-            if (peerStatus) {
-                peerStatus.textContent =
-                    "Görüntü ve ses bağlı";
-            }
-        };
-
-
-    peerConnection.onicecandidate =
-        event => {
-
-            if (!event.candidate) {
-                return;
-            }
-
-            sendSignal({
-
-                type:
-                    "candidate",
-
-                candidate:
-                    event.candidate
-            });
-        };
-
-
-    peerConnection.onconnectionstatechange =
-        () => {
-
-            const state =
-                peerConnection.connectionState;
-
-            console.log(
-                "🌐 WebRTC:",
-                state
-            );
-
-            if (state === "connected") {
-
-                setConnectionState(
-                    "connected",
-                    "Bağlandı",
-                    "Görüşme aktif"
-                );
-
-            } else if (
-                state === "connecting"
-            ) {
-
-                setConnectionState(
-                    "connecting",
-                    "Bağlanıyor",
-                    "Karşı taraf bekleniyor..."
-                );
-
-            } else if (
-                state === "failed"
-            ) {
-
-                setConnectionState(
-                    "error",
-                    "Bağlantı başarısız",
-                    "WebRTC bağlantısı kurulamadı."
-                );
-
-            } else if (
-                state === "disconnected"
-            ) {
-
-                setConnectionState(
-                    "error",
-                    "Bağlantı kesildi",
-                    "Karşı taraf bağlantısı koptu."
-                );
-            }
-        };
-
+        if (state === "connected") {
+            setConnectionState("connected", "Bağlı", "Görüşme aktif ✅");
+            resetReconnect();
+        } else if (state === "disconnected" || state === "failed") {
+            setConnectionState("error", "Bağlantı kesildi", "Yeniden bağlanılıyor...");
+            showToast("⚠️ Bağlantı koptu, yeniden bağlanılıyor...", 4000);
+            tryIceRestart();
+        }
+    };
 
     return peerConnection;
 }
 
-// ============================================================
-// VIDEO OPTIMIZATION
-// ============================================================
-
-async function optimizeVideoSender(
-    sender,
-    maxBitrate,
-    maxFramerate
-) {
-
-    try {
-
-        const parameters =
-            sender.getParameters();
-
-        if (!parameters.encodings) {
-            parameters.encodings = [{}];
+function tryIceRestart() {
+    if (!peerConnection || reconnectAttempts >= 5) return;
+    reconnectAttempts++;
+    setTimeout(async () => {
+        if (!peerConnection) return;
+        try {
+            const offer = await peerConnection.createOffer({ iceRestart: true });
+            await peerConnection.setLocalDescription(offer);
+            sendSignal({ type: "offer", offer });
+        } catch (e) {
+            console.warn("ICE restart failed:", e);
+            connectSocket(); // fallback: full reconnect
         }
-
-        parameters.encodings[0].maxBitrate =
-            maxBitrate;
-
-        parameters.encodings[0].maxFramerate =
-            maxFramerate;
-
-        parameters.encodings[0].scaleResolutionDownBy =
-            1;
-
-        await sender.setParameters(
-            parameters
-        );
-
-    } catch (error) {
-
-        console.warn(
-            "Video bitrate ayarlanamadı:",
-            error
-        );
-    }
+    }, 2000 * reconnectAttempts);
 }
 
-// ============================================================
-// SIGNALING
-// ============================================================
+function resetReconnect() {
+    reconnectAttempts = 0;
+}
+
+// ── Signaling ─────────────────────────────────────────────────
+function sendSignal(data) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(data));
+    }
+}
 
 function connectSocket() {
+    if (socket) { try { socket.close(); } catch {} }
 
-    if (socket) {
+    socket = new WebSocket(SIGNALING_URL);
+    startPingMonitor();
+
+    socket.onopen = () => {
+        console.log("🟢 Signaling bağlandı.");
+        setConnectionState("connecting", "Sunucu bağlı", "Odaya katılınıyor...");
+        sendSignal({ type: "join", room: currentRoomId, name: currentUserName });
+        reconnectAttempts = 0;
+    };
+
+    socket.onmessage = async event => {
         try {
-            socket.close();
-        } catch {}
-    }
+            const msg = JSON.parse(event.data);
+            await handleSignal(msg);
+        } catch (e) { console.error("Signal parse:", e); }
+    };
 
-    console.log(
-        "🔌 Railway WebSocket:",
-        SIGNALING_URL
-    );
+    socket.onerror = () => {
+        setConnectionState("error", "Sunucu hatası", "Yeniden bağlanılıyor...");
+    };
 
-    socket =
-        new WebSocket(
-            SIGNALING_URL
-        );
-
-    socket.onopen =
-        () => {
-
-            console.log(
-                "🟢 Signaling bağlantısı açıldı."
-            );
-
-            setConnectionState(
-                "connected",
-                "Sunucu bağlı",
-                "Odaya bağlanılıyor..."
-            );
-
-            sendSignal({
-
-                type:
-                    "join",
-
-                room:
-                    currentRoomId,
-
-                name:
-                    currentUserName
-            });
-        };
-
-
-    socket.onmessage =
-        async event => {
-
-            try {
-
-                const message =
-                    JSON.parse(
-                        event.data
-                    );
-
-                console.log(
-                    "📨 SIGNAL:",
-                    message.type
-                );
-
-                await handleSignal(
-                    message
-                );
-
-            } catch (error) {
-
-                console.error(
-                    "Signal parse hatası:",
-                    error
-                );
-            }
-        };
-
-
-    socket.onerror =
-        error => {
-
-            console.error(
-                "❌ WebSocket:",
-                error
-            );
-
-            setConnectionState(
-                "error",
-                "Sunucu hatası",
-                "WebSocket bağlantısı başarısız."
-            );
-        };
-
-
-    socket.onclose =
-        () => {
-
-            console.log(
-                "🔴 WebSocket kapandı."
-            );
-        };
+    socket.onclose = () => {
+        console.warn("WebSocket kapandı. Yeniden deneniyor...");
+        if (currentRoomId) {
+            setTimeout(() => connectSocket(), 3000 + reconnectAttempts * 2000);
+            reconnectAttempts++;
+        }
+    };
 }
 
-function sendSignal(data) {
-
-    if (
-        !socket ||
-        socket.readyState !==
-            WebSocket.OPEN
-    ) {
-        return;
-    }
-
-    socket.send(
-        JSON.stringify(data)
-    );
-}
-
-// ============================================================
-// SIGNAL HANDLER
-// ============================================================
-
-async function handleSignal(message) {
-
-    switch (message.type) {
+async function handleSignal(msg) {
+    switch (msg.type) {
 
         case "joined":
-
-            console.log(
-                "🏠 Odaya girdik:",
-                message.room,
-                "Kişi:",
-                message.count
-            );
-
-            if (roomCodeDisplay) {
-                roomCodeDisplay.textContent =
-                    message.room ||
-                    currentRoomId;
-            }
-
+            console.log(`✅ Odaya katıldı: ${msg.room} (${msg.count} kişi)`);
+            setConnectionState("connected", "Odada", `${currentRoomId} • ${msg.count}/2 kişi`);
+            if (topRoomCode) topRoomCode.textContent = currentRoomId;
             break;
 
         case "peer-joined":
-
-            console.log(
-                "👤 Karşı taraf katıldı:",
-                message.name
-            );
-
-            setRemoteName(
-                message.name
-            );
-
-            if (peerStatus) {
-                peerStatus.textContent =
-                    "Karşı taraf bağlandı";
-            }
-
-            await createOffer();
-
+            console.log("🧑 Karşı taraf katıldı:", msg.name);
+            if (remoteName) remoteName.textContent = msg.name || "Karşı taraf";
+            showToast(`🎉 ${msg.name || "Karşı taraf"} odaya girdi!`);
+            showView("call");
+            // Send offer
+            if (!peerConnection) createPeerConnection();
+            try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                sendSignal({ type: "offer", offer });
+            } catch (e) { console.error("Offer oluşturulamadı:", e); }
             break;
 
         case "peer-name":
-
-            setRemoteName(
-                message.name
-            );
-
-            break;
-
-        case "offer":
-
-            await handleOffer(
-                message.offer
-            );
-
-            break;
-
-        case "answer":
-
-            await handleAnswer(
-                message.answer
-            );
-
-            break;
-
-        case "candidate":
-
-            await handleCandidate(
-                message.candidate
-            );
-
-            break;
-
-        case "chat":
-
-            if (
-                typeof window.receiveYanYanaChat ===
-                "function"
-            ) {
-
-                window.receiveYanYanaChat(
-                    message.name,
-                    message.text
-                );
-            }
-
+            if (remoteName) remoteName.textContent = msg.name || "Karşı taraf";
             break;
 
         case "peer-left":
-
-            console.log(
-                "👋 Karşı taraf ayrıldı."
-            );
-
-            resetRemote();
-
-            if (peerStatus) {
-                peerStatus.textContent =
-                    "● Bekleniyor";
-            }
-
-            setConnectionState(
-                "connected",
-                "Sunucu bağlı",
-                "Karşı taraf bekleniyor..."
-            );
-
+            console.log("👋 Karşı taraf ayrıldı.");
+            showToast("👋 Karşı taraf ayrıldı.", 4000);
+            if (remotePlaceholder) remotePlaceholder.style.display = "flex";
+            if (remoteVideo)       remoteVideo.srcObject = null;
+            remoteStream = null;
             break;
 
+        case "offer":
+            if (!peerConnection) createPeerConnection();
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.offer));
+            pendingCandidates.forEach(c => peerConnection.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
+            pendingCandidates = [];
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            sendSignal({ type: "answer", answer });
+            break;
+
+        case "answer":
+            if (peerConnection?.signalingState === "have-local-offer") {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                pendingCandidates.forEach(c => peerConnection.addIceCandidate(new RTCIceCandidate(c)).catch(() => {}));
+                pendingCandidates = [];
+            }
+            break;
+
+        case "candidate":
+            if (peerConnection?.remoteDescription) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+            } else {
+                pendingCandidates.push(msg.candidate);
+            }
+            break;
+
+        case "chat":
+            if (typeof addChatMessage === "function") addChatMessage(msg.name, msg.text);
+            break;
+
+        case "reaction":
+            spawnFlyingReaction(msg.emoji, false);
+            break;
+
+        case "typing":
+            if (typeof showTypingIndicator === "function") showTypingIndicator(msg.name);
+            break;
+
+        case "mic-status":
+            if (remoteMicStatus) remoteMicStatus.textContent = msg.enabled ? "🎤" : "🔇";
+            showToast(msg.enabled ? "🎤 Karşı taraf mikrofonu açtı" : "🔇 Karşı taraf mikrofonu kapattı", 2000);
+            break;
+
+        case "camera-status":
+            showToast(msg.enabled ? "📷 Karşı taraf kamerayı açtı" : "📷 Karşı taraf kamerayı kapattı", 2000);
+            break;
+
+        case "pong": {
+            const latency = Date.now() - (msg.time || 0);
+            if (pingDisplay) pingDisplay.textContent = `${latency} ms`;
+            evaluateNetworkQuality(latency);
+            break;
+        }
+
         case "full":
-
-            alert(
-                "Bu oda zaten dolu."
-            );
-
-            leaveRoom();
-
+            showToast("❌ Oda dolu! Başka bir oda dene.", 5000);
+            showView("home");
             break;
 
         case "error":
-
-            console.error(
-                "Server error:",
-                message.message
-            );
-
-            alert(
-                message.message ||
-                "Sunucu hatası."
-            );
-
+            showToast(`❌ Hata: ${msg.message}`, 4000);
             break;
     }
 }
 
-// ============================================================
-// OFFER
-// ============================================================
-
-async function createOffer() {
-
-    try {
-
-        const pc =
-            createPeerConnection();
-
-        console.log(
-            "📤 OFFER oluşturuluyor..."
-        );
-
-        const offer =
-            await pc.createOffer();
-
-        await pc.setLocalDescription(
-            offer
-        );
-
-        sendSignal({
-
-            type:
-                "offer",
-
-            offer:
-                pc.localDescription
-        });
-
-        console.log(
-            "📤 OFFER gönderildi."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Offer oluşturulamadı:",
-            error
-        );
-    }
+// ── Start ─────────────────────────────────────────────────────
+async function start() {
+    console.log("🚀 YanYana başlıyor...");
+    setConnectionState("connecting", "Bağlanıyor", "Cihazlar hazırlanıyor...");
+    await getLocalMedia();
+    createPeerConnection();
+    connectSocket();
 }
 
-// ============================================================
-// HANDLE OFFER
-// ============================================================
-
-async function handleOffer(
-    offer
-) {
-
-    try {
-
-        const pc =
-            createPeerConnection();
-
-        await pc.setRemoteDescription(
-            new RTCSessionDescription(
-                offer
-            )
-        );
-
-        await flushCandidates();
-
-        const answer =
-            await pc.createAnswer();
-
-        await pc.setLocalDescription(
-            answer
-        );
-
-        sendSignal({
-
-            type:
-                "answer",
-
-            answer:
-                pc.localDescription
-        });
-
-        console.log(
-            "📤 ANSWER gönderildi."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Offer işlenemedi:",
-            error
-        );
-    }
-}
-
-// ============================================================
-// HANDLE ANSWER
-// ============================================================
-
-async function handleAnswer(
-    answer
-) {
-
-    try {
-
-        if (!peerConnection) {
-            return;
-        }
-
-        await peerConnection.setRemoteDescription(
-            new RTCSessionDescription(
-                answer
-            )
-        );
-
-        await flushCandidates();
-
-        console.log(
-            "✅ ANSWER kabul edildi."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Answer işlenemedi:",
-            error
-        );
-    }
-}
-
-// ============================================================
-// ICE
-// ============================================================
-
-async function handleCandidate(
-    candidate
-) {
-
-    try {
-
-        if (
-            !peerConnection ||
-            !peerConnection.remoteDescription
-        ) {
-
-            pendingCandidates.push(
-                candidate
-            );
-
-            return;
-        }
-
-        await peerConnection.addIceCandidate(
-            new RTCIceCandidate(
-                candidate
-            )
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ ICE eklenemedi:",
-            error
-        );
-    }
-}
-
-async function flushCandidates() {
-
-    if (
-        !peerConnection ||
-        !peerConnection.remoteDescription
-    ) {
-        return;
-    }
-
-    while (
-        pendingCandidates.length > 0
-    ) {
-
-        const candidate =
-            pendingCandidates.shift();
-
-        try {
-
-            await peerConnection.addIceCandidate(
-                new RTCIceCandidate(
-                    candidate
-                )
-            );
-
-        } catch (error) {
-
-            console.error(
-                "❌ ICE flush:",
-                error
-            );
-        }
-    }
-}
-
-// ============================================================
-// REMOTE NAME
-// ============================================================
-
-function setRemoteName(
-    name
-) {
-
-    if (remoteName) {
-
-        remoteName.textContent =
-            name || "Karşı taraf";
-    }
-}
-
-// ============================================================
-// REMOTE RESET
-// ============================================================
-
-function resetRemote() {
-
-    remoteStream =
-        null;
-
-    if (remoteVideo) {
-        remoteVideo.srcObject =
-            null;
-    }
-
-    if (remoteAudio) {
-        remoteAudio.srcObject =
-            null;
-    }
-
-    if (remotePlaceholder) {
-        remotePlaceholder.style.display =
-            "flex";
-    }
-
-    if (remotePlaceholderText) {
-        remotePlaceholderText.textContent =
-            "Karşı taraf bekleniyor";
-    }
-
-    if (remoteName) {
-        remoteName.textContent =
-            "Karşı taraf";
-    }
-}
-
-// ============================================================
-// LOCAL UI
-// ============================================================
-
-function updateLocalUI() {
-
-    if (localMicStatus) {
-
-        localMicStatus.textContent =
-            isMicOn
-                ? "🎤"
-                : "🔇";
-    }
-
-    if (micBtn) {
-
-        micBtn.classList.toggle(
-            "off",
-            !isMicOn
-        );
-
-        micBtn.innerHTML =
-            isMicOn
-                ? "🎤 Mikrofon Açık"
-                : "🔇 Mikrofon Kapalı";
-    }
-
-    if (cameraBtn) {
-
-        cameraBtn.classList.toggle(
-            "off",
-            !isCameraOn
-        );
-
-        cameraBtn.innerHTML =
-            isCameraOn
-                ? "📷 Kamera Açık"
-                : "🚫 Kamera Yok";
-    }
-}
-
-// ============================================================
-// MİKROFON
-// ============================================================
-
+// ── Mic toggle ────────────────────────────────────────────────
 if (micBtn) {
-
-    micBtn.addEventListener(
-        "click",
-        () => {
-
-            if (!localStream) {
-                return;
-            }
-
-            const tracks =
-                localStream.getAudioTracks();
-
-            if (!tracks.length) {
-                return;
-            }
-
-            isMicOn =
-                !isMicOn;
-
-            for (
-                const track of tracks
-            ) {
-
-                track.enabled =
-                    isMicOn;
-            }
-
-            updateLocalUI();
-        }
-    );
+    micBtn.addEventListener("click", () => {
+        isMicOn = !isMicOn;
+        localStream?.getAudioTracks().forEach(t => { t.enabled = isMicOn; });
+        updateLocalUI();
+        showToast(isMicOn ? "🎤 Mikrofon açıldı" : "🔇 Mikrofon kapatıldı");
+    });
 }
 
-// ============================================================
-// KAMERA
-// ============================================================
-
+// ── Camera toggle ──────────────────────────────────────────────
 if (cameraBtn) {
-
-    cameraBtn.addEventListener(
-        "click",
-        () => {
-
-            if (!localStream) {
-                return;
-            }
-
-            const tracks =
-                localStream.getVideoTracks();
-
-            if (!tracks.length) {
-                return;
-            }
-
-            isCameraOn =
-                !isCameraOn;
-
-            for (
-                const track of tracks
-            ) {
-
-                track.enabled =
-                    isCameraOn;
-            }
-
-            updateLocalUI();
-        }
-    );
+    cameraBtn.addEventListener("click", () => {
+        isCameraOn = !isCameraOn;
+        localStream?.getVideoTracks().forEach(t => { t.enabled = isCameraOn; });
+        if (localPlaceholder) localPlaceholder.style.display = isCameraOn ? "none" : "flex";
+        updateLocalUI();
+        showToast(isCameraOn ? "📷 Kamera açıldı" : "📷 Kamera kapatıldı");
+    });
 }
 
-// ============================================================
-// EKRAN PAYLAŞIMI
-// ============================================================
-
-// ============================================================
-// EKRAN PAYLAŞIMI
-// ============================================================
-
+// ── Screen share — open modal ─────────────────────────────────
 if (screenBtn) {
-
-    screenBtn.addEventListener(
-        "click",
-        toggleScreenShare
-    );
-
+    screenBtn.addEventListener("click", () => {
+        if (isScreenSharing) {
+            stopScreenShare();
+        } else {
+            openScreenShareModal();
+        }
+    });
 }
 
-async function toggleScreenShare() {
+async function openScreenShareModal() {
+    if (!screenShareModal) return;
+    screenShareModal.classList.remove("hidden");
+    selectedSourceId = null;
+    if (startShareBtn) startShareBtn.disabled = true;
+    await loadScreenSources();
+}
 
-    if (isScreenSharing) {
-
-        await stopScreenShare();
-
-        return;
-    }
-
-    if (!peerConnection) {
-
-        alert(
-            "Önce karşı tarafın bağlanmasını bekle."
-        );
-
-        return;
-    }
+async function loadScreenSources() {
+    if (!screenSourcesGrid) return;
+    screenSourcesGrid.innerHTML = `<div class="screen-loading">📡 Kaynaklar yükleniyor...</div>`;
 
     try {
-
-        console.log(
-            "🖥️ Ekran paylaşımı isteniyor..."
-        );
-
-        screenStream =
-            await navigator.mediaDevices.getDisplayMedia({
-
-                video: {
-                    width: {
-                        ideal: 1920
-                    },
-
-                    height: {
-                        ideal: 1080
-                    },
-
-                    frameRate: {
-                        ideal: 60,
-                        max: 60
-                    }
-                },
-
-                audio: false
-
-            });
-
-        const screenTrack =
-            screenStream.getVideoTracks()[0];
-
-        if (!screenTrack) {
-
-            console.error(
-                "❌ Ekran track'i bulunamadı."
-            );
-
-            return;
+        let sources = [];
+        if (ipcRenderer) {
+            sources = await ipcRenderer.invoke("get-screen-sources");
         }
-
-        screenTrack.contentHint =
-          "detail";
-
-        // ====================================================
-        // VAR OLAN KAMERA TRACK'İ VARSA ONU DEĞİŞTİR
-        // ====================================================
-
-        let sender =
-            peerConnection
-                .getSenders()
-                .find(
-                    item =>
-                        item.track &&
-                        item.track.kind === "video"
-                );
-
-        if (sender) {
-
-            console.log(
-                "🎥 Kamera track'i ekran ile değiştiriliyor."
-            );
-
-            await sender.replaceTrack(
-                screenTrack
-            );
-
-        }
-
-        // ====================================================
-        // KAMERA YOKSA EKRAN TRACK'İNİ YENİ EKLE
-        // ====================================================
-
-        else {
-
-            console.log(
-                "🖥️ Kamera track'i yok. Ekran track'i ekleniyor."
-            );
-
-            sender =
-                peerConnection.addTrack(
-                    screenTrack,
-                    screenStream
-                );
-
-            // Yeni video track eklendiği için
-            // tekrar SDP görüşmesi yapıyoruz.
-
-            const offer =
-                await peerConnection.createOffer();
-
-            await peerConnection.setLocalDescription(
-                offer
-            );
-
-            sendSignal({
-
-                type:
-                    "offer",
-
-                offer:
-                    peerConnection.localDescription
-            });
-        }
-
-        await optimizeVideoSender(
-            sender,
-            10000000,
-            30
-        );
-
-        isScreenSharing =
-            true;
-
-        if (screenBtn) {
-
-            screenBtn.classList.add(
-                "active"
-            );
-
-            screenBtn.innerHTML =
-                "🛑 Ekranı Durdur";
-        }
-
-        screenTrack.onended =
-            () => {
-
-                stopScreenShare();
-
-            };
-
-        console.log(
-            "🖥️ Ekran paylaşımı başladı."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Ekran paylaşımı:",
-            error
-        );
-
-        screenStream = null;
-        isScreenSharing = false;
+        cachedSources = sources;
+        renderSourceGrid(sources, isScreenTabActive);
+    } catch (e) {
+        screenSourcesGrid.innerHTML = `<div class="screen-loading">⚠️ Kaynaklar alınamadı.</div>`;
     }
 }
 
-// ============================================================
-// EKRAN PAYLAŞIMINI DURDUR
-// ============================================================
+function renderSourceGrid(sources, screensOnly) {
+    if (!screenSourcesGrid) return;
+    const filtered = screensOnly
+        ? sources.filter(s => s.isScreen)
+        : sources.filter(s => !s.isScreen);
 
-async function stopScreenShare() {
-
-    if (!isScreenSharing) {
+    if (!filtered.length) {
+        screenSourcesGrid.innerHTML = `<div class="screen-loading">Kaynak bulunamadı.</div>`;
         return;
     }
 
+    screenSourcesGrid.innerHTML = "";
+    filtered.forEach(src => {
+        const card = document.createElement("div");
+        card.className = "source-card";
+        card.dataset.id = src.id;
+        card.innerHTML = `
+            <div class="source-thumb-wrap">
+                <img src="${src.thumbnail}" alt="${src.name}" class="source-thumb">
+                ${src.appIcon ? `<img src="${src.appIcon}" class="source-app-icon" alt="">` : ""}
+            </div>
+            <div class="source-name">${src.name}</div>
+        `;
+        card.addEventListener("click", () => {
+            screenSourcesGrid.querySelectorAll(".source-card").forEach(c => c.classList.remove("selected"));
+            card.classList.add("selected");
+            selectedSourceId = src.id;
+            if (startShareBtn) startShareBtn.disabled = false;
+        });
+        screenSourcesGrid.appendChild(card);
+    });
+}
+
+// Tab switching
+if (tabScreensBtn) {
+    tabScreensBtn.addEventListener("click", () => {
+        isScreenTabActive = true;
+        tabScreensBtn.classList.add("active");
+        tabWindowsBtn?.classList.remove("active");
+        renderSourceGrid(cachedSources, true);
+    });
+}
+if (tabWindowsBtn) {
+    tabWindowsBtn.addEventListener("click", () => {
+        isScreenTabActive = false;
+        tabWindowsBtn.classList.add("active");
+        tabScreensBtn?.classList.remove("active");
+        renderSourceGrid(cachedSources, false);
+    });
+}
+
+// Resolution / FPS pill selectors (HTML uses pill buttons, not <select>)
+document.querySelectorAll("#resolutionSelector .pill-opt").forEach(btn => {
+    btn.addEventListener("click", () => {
+        document.querySelectorAll("#resolutionSelector .pill-opt").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentSelectedRes = parseInt(btn.dataset.res) || 1080;
+    });
+});
+document.querySelectorAll("#fpsSelector .pill-opt").forEach(btn => {
+    btn.addEventListener("click", () => {
+        document.querySelectorAll("#fpsSelector .pill-opt").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentSelectedFps = parseInt(btn.dataset.fps) || 30;
+    });
+});
+
+// Close screen modal
+if (closeScreenModalBtn) {
+    closeScreenModalBtn.addEventListener("click", () => {
+        screenShareModal?.classList.add("hidden");
+    });
+}
+
+// Start share button
+if (startShareBtn) {
+    startShareBtn.addEventListener("click", async () => {
+        if (!selectedSourceId) return;
+        screenShareModal?.classList.add("hidden");
+        await startScreenShare(selectedSourceId);
+    });
+}
+
+// Stop share button
+if (stopShareBtn) {
+    stopShareBtn.addEventListener("click", () => stopScreenShare());
+}
+
+async function startScreenShare(sourceId) {
     try {
-
-        const cameraTrack =
-            localStream
-                ? localStream.getVideoTracks()[0]
-                : null;
-
-        const sender =
-            peerConnection
-                ? peerConnection
-                    .getSenders()
-                    .find(
-                        item =>
-                            item.track &&
-                            item.track.kind === "video"
-                    )
-                : null;
-
-        // ====================================================
-        // KAMERA VARSA EKRANDAN KAMERAYA GERİ DÖN
-        // ====================================================
-
-        if (
-            sender &&
-            cameraTrack
-        ) {
-
-            console.log(
-                "🎥 Kameraya geri dönülüyor."
-            );
-
-            await sender.replaceTrack(
-                cameraTrack
-            );
-
-            await optimizeVideoSender(
-                sender,
-                6000000,
-                60
-            );
-        }
-
-        // ====================================================
-        // KAMERA YOKSA EKRAN TRACK'İNİ KALDIR
-        // ====================================================
-
-        else if (
-            sender &&
-            !cameraTrack
-        ) {
-
-            console.log(
-                "🖥️ Kamera yok, ekran track'i kaldırılıyor."
-            );
-
-            peerConnection.removeTrack(
-                sender
-            );
-
-            // Track kaldırıldığı için
-            // karşı tarafa yeni SDP gönder.
-
-            const offer =
-                await peerConnection.createOffer();
-
-            await peerConnection.setLocalDescription(
-                offer
-            );
-
-            sendSignal({
-
-                type:
-                    "offer",
-
-                offer:
-                    peerConnection.localDescription
-            });
-        }
-
-        // ====================================================
-        // SCREEN STREAM KAPAT
-        // ====================================================
-
-        if (screenStream) {
-
-            for (
-                const track of
-                screenStream.getTracks()
-            ) {
-
-                track.stop();
-            }
-        }
-
-        screenStream =
-            null;
-
-        isScreenSharing =
-            false;
-
-        if (screenBtn) {
-
-            screenBtn.classList.remove(
-                "active"
-            );
-
-            screenBtn.innerHTML =
-                "🖥️ Ekran Paylaş";
-        }
-
-        console.log(
-            "🛑 Ekran paylaşımı durduruldu."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Ekran paylaşımı kapatma:",
-            error
-        );
-    }
-}
-
-// ============================================================
-// EKRAN PAYLAŞIMINI DURDUR
-// ============================================================
-
-async function stopScreenShare() {
-
-    if (!isScreenSharing) {
-        return;
-    }
-
-    try {
-
-        const cameraTrack =
-            localStream
-                ? localStream.getVideoTracks()[0]
-                : null;
-
-        const sender =
-            peerConnection
-                ? peerConnection
-                    .getSenders()
-                    .find(
-                        item =>
-                            item.track &&
-                            item.track.kind ===
-                                "video"
-                    )
-                : null;
-
-        if (
-            sender &&
-            cameraTrack
-        ) {
-
-            await sender.replaceTrack(
-                cameraTrack
-            );
-
-            await optimizeVideoSender(
-                sender,
-                6000000,
-                60
-            );
-        }
-
-        if (screenStream) {
-
-            for (
-                const track of
-                screenStream.getTracks()
-            ) {
-
-                track.stop();
-            }
-        }
-
-        screenStream =
-            null;
-
-        isScreenSharing =
-            false;
-
-        if (screenBtn) {
-
-            screenBtn.classList.remove(
-                "active"
-            );
-
-            screenBtn.innerHTML =
-                "🖥️ Ekran Paylaş";
-        }
-
-    } catch (error) {
-
-        console.error(
-            "❌ Ekran paylaşımı kapatma:",
-            error
-        );
-    }
-}
-
-// ============================================================
-// SES
-// ============================================================
-
-if (speakerBtn) {
-
-    speakerBtn.addEventListener(
-        "click",
-        () => {
-
-            if (!remoteVideo) {
-                return;
-            }
-
-            remoteVideo.muted =
-                !remoteVideo.muted;
-
-            speakerBtn.innerHTML =
-                remoteVideo.muted
-                    ? "🔇 Ses Kapalı"
-                    : "🔊 Ses";
-        }
-    );
-}
-
-// ============================================================
-// ODA KODU KOPYALA
-// ============================================================
-
-async function copyRoomCode() {
-
-    if (!currentRoomId) {
-        return;
-    }
-
-    try {
-
-        await navigator.clipboard.writeText(
-            currentRoomId
-        );
-
-        console.log(
-            "📋 Oda kodu kopyalandı."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Oda kodu kopyalanamadı:",
-            error
-        );
-    }
-}
-
-if (copyRoomBtn) {
-
-    copyRoomBtn.addEventListener(
-        "click",
-        copyRoomCode
-    );
-}
-
-if (copyRoomTopBtn) {
-
-    copyRoomTopBtn.addEventListener(
-        "click",
-        copyRoomCode
-    );
-}
-
-// ============================================================
-// TAM EKRAN
-// ============================================================
-
-function enableFullscreen() {
-
-    const remoteBox =
-        document.getElementById("remoteVideoBox");
-
-    const remoteVideoElement =
-        document.getElementById("remoteVideo");
-
-    if (!remoteBox) {
-        return;
-    }
-
-    // Daha önce oluşturulduysa tekrar oluşturma
-    if (
-        document.getElementById("fullscreenBtn")
-    ) {
-        return;
-    }
-
-    const button =
-        document.createElement("button");
-
-    button.id =
-        "fullscreenBtn";
-
-    button.className =
-        "fullscreen-button";
-
-    button.textContent =
-        "⛶";
-
-    button.title =
-        "Tam ekran";
-
-    button.addEventListener(
-        "click",
-        async () => {
-
-            try {
-
-                if (
-                    document.fullscreenElement
-                ) {
-
-                    await document.exitFullscreen();
-
-                    return;
-                }
-
-                // Önce video elementini dene
-                if (
-                    remoteVideoElement &&
-                    remoteVideoElement.requestFullscreen
-                ) {
-
-                    await remoteVideoElement.requestFullscreen();
-
-                } else {
-
-                    await remoteBox.requestFullscreen();
-
-                }
-
-            } catch (error) {
-
-                console.error(
-                    "❌ Tam ekran açılamadı:",
-                    error
-                );
-
-                // Video çalışmazsa kutuyu dene
-                try {
-
-                    await remoteBox.requestFullscreen();
-
-                } catch (secondError) {
-
-                    console.error(
-                        "❌ Kutu tam ekranı da açılamadı:",
-                        secondError
-                    );
+        const withAudio = audioShareToggle ? audioShareToggle.checked : false;
+        const res       = currentSelectedRes;
+        const fps       = currentSelectedFps;
+        const maxW      = res === 1440 ? 2560 : res === 1080 ? 1920 : 1280;
+        const maxH      = res === 1440 ? 1440 : res === 1080 ? 1080 : 720;
+
+        const constraints = {
+            audio: withAudio ? { mandatory: { chromeMediaSource: "desktop" } } : false,
+            video: {
+                mandatory: {
+                    chromeMediaSource:   "desktop",
+                    chromeMediaSourceId: sourceId,
+                    maxWidth:  maxW,
+                    maxHeight: maxH,
+                    maxFrameRate: fps
                 }
             }
+        };
+
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch {
+            // Fallback: getDisplayMedia
+            stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: withAudio });
         }
-    );
 
-    remoteBox.appendChild(
-        button
-    );
+        screenStream = stream;
+        isScreenSharing = true;
 
-
-    // ========================================================
-    // ÇİFT TIKLA TAM EKRAN
-    // ========================================================
-
-    if (remoteVideoElement) {
-
-        remoteVideoElement.addEventListener(
-            "dblclick",
-            async () => {
-
-                try {
-
-                    if (
-                        document.fullscreenElement
-                    ) {
-
-                        await document.exitFullscreen();
-
-                    } else {
-
-                        await remoteVideoElement.requestFullscreen();
-
-                    }
-
-                } catch (error) {
-
-                    console.error(
-                        "❌ Çift tık tam ekran:",
-                        error
-                    );
-
-                    try {
-
-                        await remoteBox.requestFullscreen();
-
-                    } catch {}
-                }
+        // Replace video track in peer connection
+        if (peerConnection) {
+            const videoSender = peerConnection.getSenders().find(s => s.track?.kind === "video");
+            if (videoSender && screenStream.getVideoTracks()[0]) {
+                await videoSender.replaceTrack(screenStream.getVideoTracks()[0]);
             }
-        );
+        }
+
+        // Show screen in local video
+        if (localVideo) {
+            localVideo.srcObject = screenStream;
+            localVideo.muted     = true;
+            localVideo.play().catch(() => {});
+        }
+
+        // Show PiP camera box
+        if (localStream?.getVideoTracks()?.length && isCameraOn) {
+            if (floatingCamBox) floatingCamBox.classList.remove("hidden");
+            if (pipCameraVideo) {
+                pipCameraVideo.srcObject = localStream;
+                pipCameraVideo.muted     = true;
+                pipCameraVideo.play().catch(() => {});
+            }
+        }
+
+        // Show LIVE badge
+        if (liveStreamBadge) liveStreamBadge.classList.remove("hidden");
+        if (screenBtn)       screenBtn.classList.add("active");
+
+        showToast(`🖥️ Ekran paylaşımı başladı (${res}p ${fps}fps)`);
+
+        // Handle stream end
+        screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+
+    } catch (e) {
+        console.error("Screen share failed:", e);
+        showToast("❌ Ekran paylaşımı başlatılamadı.", 4000);
     }
-
-
-    // ========================================================
-    // TAM EKRANDAN ÇIKINCA
-    // ========================================================
-
-    document.addEventListener(
-        "fullscreenchange",
-        () => {
-
-            if (
-                document.fullscreenElement
-            ) {
-
-                button.textContent =
-                    "⛶";
-
-                button.title =
-                    "Tam ekrandan çık";
-
-            } else {
-
-                button.textContent =
-                    "⛶";
-
-                button.title =
-                    "Tam ekran";
-            }
-        }
-    );
 }
 
-// ============================================================
-// ÇIKIŞ
-// ============================================================
+function stopScreenShare() {
+    if (!isScreenSharing) return;
 
+    screenStream?.getTracks().forEach(t => t.stop());
+    screenStream = null;
+    isScreenSharing = false;
+
+    // Restore camera
+    if (localVideo && localStream) {
+        localVideo.srcObject = localStream;
+        localVideo.muted     = true;
+        localVideo.play().catch(() => {});
+    }
+
+    // Replace track back
+    if (peerConnection && localStream) {
+        const videoSender = peerConnection.getSenders().find(s => s.track?.kind === "video");
+        if (videoSender && localStream.getVideoTracks()[0]) {
+            videoSender.replaceTrack(localStream.getVideoTracks()[0]).catch(() => {});
+        }
+    }
+
+    if (floatingCamBox) floatingCamBox.classList.add("hidden");
+    if (liveStreamBadge) liveStreamBadge.classList.add("hidden");
+    if (screenBtn)       screenBtn.classList.remove("active");
+    if (pipCameraVideo)  pipCameraVideo.srcObject = null;
+
+    showToast("🔴 Ekran paylaşımı durduruldu.");
+}
+
+// ── Draggable PiP ──────────────────────────────────────────────
+if (floatingCamBox) {
+    let dragging = false, ox = 0, oy = 0;
+    floatingCamBox.addEventListener("mousedown", e => {
+        if (e.target.tagName === "BUTTON" || e.target.tagName === "VIDEO") return;
+        dragging = true;
+        ox = e.clientX - floatingCamBox.offsetLeft;
+        oy = e.clientY - floatingCamBox.offsetTop;
+        floatingCamBox.style.cursor = "grabbing";
+    });
+    document.addEventListener("mousemove", e => {
+        if (!dragging) return;
+        floatingCamBox.style.left = `${e.clientX - ox}px`;
+        floatingCamBox.style.top  = `${e.clientY - oy}px`;
+        floatingCamBox.style.right  = "auto";
+        floatingCamBox.style.bottom = "auto";
+    });
+    document.addEventListener("mouseup", () => {
+        dragging = false;
+        floatingCamBox.style.cursor = "grab";
+    });
+}
+
+if (closePipBtn) {
+    closePipBtn.addEventListener("click", () => {
+        floatingCamBox?.classList.add("hidden");
+    });
+}
+
+if (swapStreamBtn) {
+    swapStreamBtn.addEventListener("click", () => {
+        isPipSwapped = !isPipSwapped;
+        if (isPipSwapped) {
+            // PiP shows screen, main shows camera
+            if (localVideo && localStream) localVideo.srcObject = localStream;
+            if (pipCameraVideo && screenStream) pipCameraVideo.srcObject = screenStream;
+        } else {
+            // PiP shows camera, main shows screen
+            if (localVideo && screenStream) localVideo.srcObject = screenStream;
+            if (pipCameraVideo && localStream) pipCameraVideo.srcObject = localStream;
+        }
+        showToast("🔄 Görünüm değiştirildi.");
+    });
+}
+
+// ── Leave call ────────────────────────────────────────────────
 if (leaveCallBtn) {
-
-    leaveCallBtn.addEventListener(
-        "click",
-        () => {
-
-            if (leaveModal) {
-
-                leaveModal.style.display =
-                    "flex";
-            }
-        }
-    );
+    leaveCallBtn.addEventListener("click", () => {
+        leaveModal?.classList.remove("hidden");
+    });
 }
-
 if (cancelLeaveBtn) {
-
-    cancelLeaveBtn.addEventListener(
-        "click",
-        () => {
-
-            if (leaveModal) {
-
-                leaveModal.style.display =
-                    "none";
-            }
-        }
-    );
+    cancelLeaveBtn.addEventListener("click", () => {
+        leaveModal?.classList.add("hidden");
+    });
 }
-
 if (confirmLeaveBtn) {
-
-    confirmLeaveBtn.addEventListener(
-        "click",
-        leaveRoom
-    );
+    confirmLeaveBtn.addEventListener("click", () => leaveRoom());
 }
 
 function leaveRoom() {
-
-    if (screenStream) {
-
-        for (
-            const track of
-            screenStream.getTracks()
-        ) {
-
-            track.stop();
-        }
-    }
-
-    if (localStream) {
-
-        for (
-            const track of
-            localStream.getTracks()
-        ) {
-
-            track.stop();
-        }
-    }
-
-    if (peerConnection) {
-
-        peerConnection.close();
-
-        peerConnection =
-            null;
-    }
-
-    if (socket) {
-
-        socket.close();
-
-        socket =
-            null;
-    }
-
-    currentRoomId =
-        null;
-
-    currentUserName =
-        null;
-
-    showLobby();
-
-    if (joinRoomArea) {
-
-        joinRoomArea.classList.add(
-            "hidden"
-        );
-
-        joinRoomArea.style.display =
-            "none";
-    }
-
-    if (roomCodeInput) {
-        roomCodeInput.value =
-            "";
-    }
-
-    const cleanUrl =
-        window.location.pathname;
-
-    window.history.replaceState(
-        {},
-        "",
-        cleanUrl
-    );
+    stopScreenShare();
+    stopPingMonitor();
+    peerConnection?.close();
+    peerConnection = null;
+    try { socket?.close(); } catch {}
+    socket = null;
+    localStream?.getTracks().forEach(t => t.stop());
+    localStream  = null;
+    remoteStream = null;
+    currentRoomId   = null;
+    currentUserName = null;
+    if (leaveModal) leaveModal.classList.add("hidden");
+    showView("home");
 }
 
-// ============================================================
-// BAŞLAT
-// ============================================================
-
-async function start() {
-
-    console.log(
-        "🚀 YanYana başlatılıyor..."
-    );
-
-    console.log(
-        "🏠 Oda:",
-        currentRoomId
-    );
-
-    console.log(
-        "👤 Kullanıcı:",
-        currentUserName
-    );
-
-    showAppScreen();
-
-    setConnectionState(
-        "connecting",
-        "Bağlanıyor",
-        "Kamera hazırlanıyor..."
-    );
-
-    await getLocalMedia();
-
-    createPeerConnection();
-
-    connectSocket();
-
-    enableFullscreen();
-
-    console.log(
-        "✅ YanYana hazır."
-    );
+// ── Reactions ─────────────────────────────────────────────────
+if (reactionBtn) {
+    reactionBtn.addEventListener("click", e => {
+        e.stopPropagation();
+        reactionBar?.classList.toggle("hidden");
+    });
 }
+document.addEventListener("click", e => {
+    if (reactionBar && !reactionBar.contains(e.target) && e.target !== reactionBtn) {
+        reactionBar.classList.add("hidden");
+    }
+});
+
+if (reactionBar) {
+    reactionBar.querySelectorAll(".rx-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const emoji = btn.dataset.emoji || btn.textContent;
+            spawnFlyingReaction(emoji, true);
+            sendSignal({ type: "reaction", emoji, name: currentUserName });
+            reactionBar.classList.add("hidden");
+        });
+    });
+}
+
+function spawnFlyingReaction(emoji, isMine) {
+    if (!reactionFlyingContainer) return;
+    playPopSound();
+
+    const el2 = document.createElement("div");
+    el2.className = "flying-reaction";
+    el2.textContent = emoji;
+    el2.style.left = `${20 + Math.random() * 60}%`;
+    el2.style.animationDuration = `${2.5 + Math.random()}s`;
+    reactionFlyingContainer.appendChild(el2);
+    setTimeout(() => el2.remove(), 3500);
+}
+
+function playPopSound() {
+    try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const ctx  = new AC();
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.12);
+    } catch {}
+}
+
+// ── Settings modal ────────────────────────────────────────────
+if (settingsBtn) {
+    settingsBtn.addEventListener("click", async () => {
+        settingsModal?.classList.remove("hidden");
+        await populateDevices();
+        // Camera preview
+        if (settingsCamPreview && localStream) {
+            settingsCamPreview.srcObject = localStream;
+            settingsCamPreview.muted     = true;
+            settingsCamPreview.play().catch(() => {});
+        }
+    });
+}
+if (closeSettingsModalBtn) {
+    closeSettingsModalBtn.addEventListener("click", () => {
+        settingsModal?.classList.add("hidden");
+        if (settingsCamPreview) settingsCamPreview.srcObject = null;
+        stopMicTest();
+    });
+}
+
+async function populateDevices() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const mics     = devices.filter(d => d.kind === "audioinput");
+        const cameras  = devices.filter(d => d.kind === "videoinput");
+        const speakers = devices.filter(d => d.kind === "audiooutput");
+
+        if (audioSourceSelect) {
+            audioSourceSelect.innerHTML = "";
+            mics.forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d.deviceId;
+                opt.textContent = d.label || `Mikrofon ${audioSourceSelect.options.length + 1}`;
+                audioSourceSelect.appendChild(opt);
+            });
+        }
+        if (videoSourceSelect) {
+            videoSourceSelect.innerHTML = "";
+            cameras.forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d.deviceId;
+                opt.textContent = d.label || `Kamera ${videoSourceSelect.options.length + 1}`;
+                videoSourceSelect.appendChild(opt);
+            });
+        }
+        if (audioOutputSelect) {
+            audioOutputSelect.innerHTML = "";
+            speakers.forEach(d => {
+                const opt = document.createElement("option");
+                opt.value = d.deviceId;
+                opt.textContent = d.label || `Hoparlör ${audioOutputSelect.options.length + 1}`;
+                audioOutputSelect.appendChild(opt);
+            });
+        }
+    } catch (e) { console.warn("Cihaz listeleme hatası:", e); }
+}
+
+// Speaker selection
+if (audioOutputSelect) {
+    audioOutputSelect.addEventListener("change", async () => {
+        const sinkId = audioOutputSelect.value;
+        for (const el3 of [remoteAudio, remoteVideo]) {
+            if (el3 && typeof el3.setSinkId === "function") {
+                try { await el3.setSinkId(sinkId); } catch {}
+            }
+        }
+        showToast("🔊 Hoparlör değiştirildi.");
+    });
+}
+
+// Master volume slider
+if (masterVolumeSlider) {
+    masterVolumeSlider.addEventListener("input", () => {
+        const vol = masterVolumeSlider.value / 100;
+        if (remoteAudio) remoteAudio.volume = vol;
+        if (remoteVideo) remoteVideo.volume = vol;
+        if (masterVolumeValue) masterVolumeValue.textContent = `${masterVolumeSlider.value}%`;
+    });
+}
+
+// Mic test
+if (testMicBtn) {
+    testMicBtn.addEventListener("click", toggleMicTest);
+}
+
+async function toggleMicTest() {
+    if (isTestingMic) { stopMicTest(); return; }
+    try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const stream   = localStream || await navigator.mediaDevices.getUserMedia({ audio: true });
+        micAudioCtx    = new AC();
+        const source   = micAudioCtx.createMediaStreamSource(stream);
+        const analyser = micAudioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        isTestingMic = true;
+        if (testMicBtn)    testMicBtn.textContent    = "🛑 Testi Durdur";
+        if (micTestStatus) micTestStatus.textContent = "Dinleniyor...";
+
+        function tick() {
+            if (!isTestingMic) return;
+            analyser.getByteFrequencyData(data);
+            const avg = data.reduce((a, b) => a + b, 0) / data.length;
+            const pct = Math.min(100, Math.round(avg * 2.2));
+            if (micMeterFill)  micMeterFill.style.width    = `${pct}%`;
+            if (micTestStatus) micTestStatus.textContent   = pct > 6 ? `Ses: ${pct}%` : "Sessiz";
+            micAnimFrame = requestAnimationFrame(tick);
+        }
+        tick();
+    } catch (e) { console.warn("Mikrofon test hatası:", e); }
+}
+
+function stopMicTest() {
+    isTestingMic = false;
+    if (micAnimFrame) cancelAnimationFrame(micAnimFrame);
+    try { micAudioCtx?.close(); } catch {}
+    micAudioCtx = null;
+    if (testMicBtn)    testMicBtn.textContent    = "🎙️ Test Başlat";
+    if (micMeterFill)  micMeterFill.style.width  = "0%";
+    if (micTestStatus) micTestStatus.textContent = "Sessiz";
+}
+
+// ── URL params on startup ─────────────────────────────────────
+const urlParams = new URLSearchParams(window.location.search);
+const urlRoom   = urlParams.get("room");
+const urlName   = urlParams.get("name");
+
+if (urlRoom) {
+    enterRoom(urlRoom, urlName || "Misafir");
+} else {
+    showView("home");
+}
+
+console.log("✨ YanYana Renderer hazır.");

@@ -278,29 +278,69 @@ server.on("connection", (ws) => {
             // =================================================
 
             if (message.type === "chat") {
+                const room = rooms.get(ws.roomId);
+                if (!room) return;
 
-                const room =
-                    rooms.get(ws.roomId);
+                broadcast(room, {
+                    type: "chat",
+                    name: message.name || ws.userName || "Misafir",
+                    text: String(message.text || "")
+                });
+                return;
+            }
 
-                if (!room) {
-                    return;
-                }
+            // =================================================
+            // REACTION (Uçan Emojiler)
+            // =================================================
+            if (message.type === "reaction") {
+                const room = rooms.get(ws.roomId);
+                if (!room) return;
 
-                broadcast(
-                    room,
-                    {
-                        type: "chat",
-                        name:
-                            message.name ||
-                            ws.userName ||
-                            "Misafir",
-                        text:
-                            String(
-                                message.text || ""
-                            )
-                    }
-                );
+                broadcast(room, {
+                    type: "reaction",
+                    emoji: String(message.emoji || "❤️"),
+                    name: message.name || ws.userName || "Misafir"
+                });
+                return;
+            }
 
+            // =================================================
+            // TYPING ("Yazıyor...")
+            // =================================================
+            if (message.type === "typing") {
+                const room = rooms.get(ws.roomId);
+                if (!room) return;
+
+                broadcast(room, {
+                    type: "typing",
+                    name: message.name || ws.userName || "Misafir"
+                }, ws);
+                return;
+            }
+
+            // =================================================
+            // MIC & CAMERA STATUS
+            // =================================================
+            if (message.type === "mic-status" || message.type === "camera-status") {
+                const room = rooms.get(ws.roomId);
+                if (!room) return;
+
+                broadcast(room, {
+                    type: message.type,
+                    enabled: Boolean(message.enabled),
+                    name: ws.userName
+                }, ws);
+                return;
+            }
+
+            // =================================================
+            // PING / PONG (Gecikme Ölçümü)
+            // =================================================
+            if (message.type === "ping") {
+                send(ws, {
+                    type: "pong",
+                    time: message.time
+                });
                 return;
             }
 

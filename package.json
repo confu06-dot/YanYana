@@ -29,12 +29,15 @@
       "renderer.js",
       "chat.js",
       "server.js",
+      "style.css",
+      "assets/**/*",
       "package.json"
     ],
     "win": {
       "target": [
         "nsis"
       ],
+      "icon": "icon.ico",
       "artifactName": "YanYana-Setup-${version}.${ext}"
     },
     "mac": {
